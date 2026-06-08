@@ -39,17 +39,28 @@ def create_spark_session() -> SparkSession:
 
 
 def read_kafka(spark: SparkSession) -> DataFrame:
-    """Read from both activity and compliance topics via regex subscription."""
-    return (
+    """Read from activity/compliance topics.
+
+    SUBSCRIBE_MODE=pattern (default) uses regex subscribePattern for dynamic
+    topic discovery. SUBSCRIBE_MODE=topics uses an explicit comma-separated
+    list from SUBSCRIBE_TOPICS — used in Phase 1 MVP to scope to documents only.
+    """
+    reader = (
         spark.readStream
         .format("kafka")
         .option("kafka.bootstrap.servers", get_env("KAFKA_BOOTSTRAP", "localhost:9092"))
-        .option("subscribePattern", r"tas\.(activity|compliance)\..*")
         .option("startingOffsets", "latest")
         .option("kafka.group.id", "spark-aggregator")
         .option("failOnDataLoss", "false")
-        .load()
     )
+    mode = get_env("SUBSCRIBE_MODE", "pattern")
+    if mode == "topics":
+        topics = get_env("SUBSCRIBE_TOPICS", "tas.activity.documents")
+        reader = reader.option("subscribe", topics)
+    else:
+        pattern = get_env("SUBSCRIBE_PATTERN", r"tas\.(activity|compliance)\..*")
+        reader = reader.option("subscribePattern", pattern)
+    return reader.load()
 
 
 def parse_cloudevents(kafka_df: DataFrame) -> DataFrame:
