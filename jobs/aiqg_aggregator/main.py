@@ -116,6 +116,11 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.assurance.nist_safe").alias("nist_safe"),
             F.col("ce.data.response_event_id").alias("response_event_id"),
             F.col("ce.data.request_event_id").alias("request_event_id"),
+            # Tag findings as raw JSON string — the typed schema can't
+            # express a map with arbitrary string keys cleanly, so we
+            # extract the sub-object as JSON via path query and cast
+            # to JSONB in the upsert SQL. NULL when no matchers fired.
+            F.get_json_object(F.col("raw_json"), "$.data.assurance.tag_findings").alias("tags"),
             F.col("raw_json").alias("raw"),
         )
         .withWatermark("time", "2 minutes")
@@ -181,7 +186,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     assurance_inbound_count, assurance_outbound_count,
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
-                    response_event_id, request_event_id, raw
+                    response_event_id, request_event_id, tags, raw
                 )
                 SELECT
                     time, tenant_id, aiqg_account_id, vendor, model, workflow,
@@ -193,7 +198,8 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     assurance_inbound_count, assurance_outbound_count,
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
-                    response_event_id, request_event_id, raw::jsonb
+                    response_event_id, request_event_id,
+                    NULLIF(tags, '')::jsonb, raw::jsonb
                 FROM {staging_table}
                 ON CONFLICT (time, tenant_id, response_event_id) DO NOTHING;
             """)
