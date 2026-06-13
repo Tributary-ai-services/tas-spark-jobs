@@ -84,6 +84,7 @@ RESPONSE_DATA = StructType([
     StructField("vendor", StringType(), True),
     StructField("model", StringType(), True),
     StructField("workflow", StringType(), True),
+    StructField("source_app", StringType(), True),
     StructField("event_timestamps", EVENT_TIMESTAMPS, True),
     StructField("token_accounting", TOKEN_ACCOUNTING, True),
     StructField("assurance", ASSURANCE, True),
