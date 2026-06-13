@@ -68,10 +68,10 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
     """Parse the CE envelope and project the columns aiqg.event_metrics expects.
 
     Filter to com.tas.aiqg.response.v1 — the paired request envelope on
-    the same topic is dropped (request carries vendor/model/workflow
-    we'd want for slicing, but joining them in stateful streaming adds
-    complexity. Until the emitter copies those fields onto the response
-    envelope they stay NULL and slicing falls back to "(unknown)").
+    the same topic is dropped. The emitter denormalizes the slicing
+    dimensions (vendor / model / workflow / source_app) + the agent_context
+    identity block onto the response envelope, so we read them directly
+    here without a stateful join.
     """
     return (
         kafka_df
@@ -94,6 +94,7 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.vendor").alias("vendor"),
             F.col("ce.data.model").alias("model"),
             F.col("ce.data.workflow").alias("workflow"),
+            F.col("ce.data.source_app").alias("source_app"),
             F.col("ce.data.status").alias("status"),
             F.col("ce.data.http_status").alias("http_status"),
             F.col("ce.data.finish_reason").alias("finish_reason"),
@@ -188,7 +189,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute(f"""
                 INSERT INTO aiqg.event_metrics (
-                    time, tenant_id, aiqg_account_id, vendor, model, workflow,
+                    time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
                     clear_efficacy, clear_assurance, clear_reliability,
@@ -203,7 +204,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     tags, raw
                 )
                 SELECT
-                    time, tenant_id, aiqg_account_id, vendor, model, workflow,
+                    time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
                     clear_efficacy, clear_assurance, clear_reliability,
