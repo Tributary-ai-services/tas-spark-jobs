@@ -53,6 +53,22 @@ CLEAR_SCORES = StructType([
     StructField("reliability", IntegerType(), True),
 ])
 
+# Self-asserted identity attribution (AgentContext in tas-llm-router's
+# event.go). Present on the response envelope when the request carried
+# baggage / TAS-Agent-* / traceparent headers or an AIQG token; the whole
+# struct is NULL when unattributed. Feeds the per-agent / per-flow rollups
+# behind /metrics/agents and /flows.
+AGENT_CONTEXT = StructType([
+    StructField("agent_id", StringType(), True),
+    StructField("agent_name", StringType(), True),
+    StructField("user_id", StringType(), True),
+    StructField("conversation_id", StringType(), True),
+    StructField("flow_id", StringType(), True),
+    StructField("principal_id", StringType(), True),
+    StructField("client_ip", StringType(), True),
+    StructField("identity_source", StringType(), True),
+])
+
 # The data payload of a com.tas.aiqg.response.v1 CloudEvent.
 RESPONSE_DATA = StructType([
     StructField("response_event_id", StringType(), True),
@@ -72,6 +88,7 @@ RESPONSE_DATA = StructType([
     StructField("token_accounting", TOKEN_ACCOUNTING, True),
     StructField("assurance", ASSURANCE, True),
     StructField("clear_scores", CLEAR_SCORES, True),
+    StructField("agent_context", AGENT_CONTEXT, True),
 ])
 
 # Outer CloudEvents 1.0 envelope. We only use the type + time + the
