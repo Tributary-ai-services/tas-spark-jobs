@@ -116,6 +116,17 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.assurance.nist_safe").alias("nist_safe"),
             F.col("ce.data.response_event_id").alias("response_event_id"),
             F.col("ce.data.request_event_id").alias("request_event_id"),
+            # Self-asserted identity attribution (NULL when unattributed) —
+            # powers the per-agent / per-flow rollups behind /metrics/agents
+            # and /flows.
+            F.col("ce.data.agent_context.agent_id").alias("agent_id"),
+            F.col("ce.data.agent_context.agent_name").alias("agent_name"),
+            F.col("ce.data.agent_context.user_id").alias("user_id"),
+            F.col("ce.data.agent_context.conversation_id").alias("conversation_id"),
+            F.col("ce.data.agent_context.flow_id").alias("flow_id"),
+            F.col("ce.data.agent_context.principal_id").alias("principal_id"),
+            F.col("ce.data.agent_context.client_ip").alias("client_ip"),
+            F.col("ce.data.agent_context.identity_source").alias("identity_source"),
             # Tag findings as raw JSON string — the typed schema can't
             # express a map with arbitrary string keys cleanly, so we
             # extract the sub-object as JSON via path query and cast
@@ -186,7 +197,10 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     assurance_inbound_count, assurance_outbound_count,
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
-                    response_event_id, request_event_id, tags, raw
+                    response_event_id, request_event_id,
+                    agent_id, agent_name, user_id, conversation_id,
+                    flow_id, principal_id, client_ip, identity_source,
+                    tags, raw
                 )
                 SELECT
                     time, tenant_id, aiqg_account_id, vendor, model, workflow,
@@ -199,6 +213,8 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
                     response_event_id, request_event_id,
+                    agent_id, agent_name, user_id, conversation_id,
+                    flow_id, principal_id, client_ip, identity_source,
                     NULLIF(tags, '')::jsonb, raw::jsonb
                 FROM {staging_table}
                 ON CONFLICT (time, tenant_id, response_event_id) DO NOTHING;

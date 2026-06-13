@@ -54,6 +54,14 @@ def test_response_data_has_token_accounting():
         _field(ta, name)
 
 
+def test_response_data_has_agent_context():
+    """Identity attribution feeds the per-agent / per-flow rollups."""
+    ac = _field(RESPONSE_DATA, 'agent_context').dataType
+    for name in ('agent_id', 'agent_name', 'user_id', 'conversation_id',
+                 'flow_id', 'principal_id', 'client_ip', 'identity_source'):
+        _field(ac, name)
+
+
 def test_production_payload_matches_schema_shape():
     """A captured envelope from tas.aiqg.events.v1 should parse cleanly.
 
@@ -100,6 +108,13 @@ def test_production_payload_matches_schema_shape():
                 "efficacy": 60,
                 "assurance": 100,
                 "reliability": 100,
+            },
+            "agent_context": {
+                "agent_id": "agent-7",
+                "agent_name": "Coder",
+                "user_id": "u_42",
+                "flow_id": "f_12",
+                "identity_source": "asserted",
             },
         },
     }
