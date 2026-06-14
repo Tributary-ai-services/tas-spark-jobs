@@ -95,6 +95,8 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.model").alias("model"),
             F.col("ce.data.workflow").alias("workflow"),
             F.col("ce.data.source_app").alias("source_app"),
+            F.col("ce.data.experiment_id").alias("experiment_id"),
+            F.col("ce.data.experiment_variant").alias("experiment_variant"),
             F.col("ce.data.status").alias("status"),
             F.col("ce.data.http_status").alias("http_status"),
             F.col("ce.data.finish_reason").alias("finish_reason"),
@@ -193,6 +195,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
             cur.execute(f"""
                 INSERT INTO aiqg.event_metrics (
                     time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
+                    experiment_id, experiment_variant,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
                     clear_efficacy, clear_assurance, clear_reliability,
@@ -209,6 +212,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                 )
                 SELECT
                     time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
+                    experiment_id, experiment_variant,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
                     clear_efficacy, clear_assurance, clear_reliability,
