@@ -128,6 +128,9 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.agent_context.principal_id").alias("principal_id"),
             F.col("ce.data.agent_context.client_ip").alias("client_ip"),
             F.col("ce.data.agent_context.identity_source").alias("identity_source"),
+            F.col("ce.data.agent_context.step_id").alias("step_id"),
+            F.col("ce.data.agent_context.parent_step_id").alias("parent_step_id"),
+            F.col("ce.data.agent_context.flow_step_seq").alias("flow_step_seq"),
             # Tag findings as raw JSON string — the typed schema can't
             # express a map with arbitrary string keys cleanly, so we
             # extract the sub-object as JSON via path query and cast
@@ -201,6 +204,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     response_event_id, request_event_id,
                     agent_id, agent_name, user_id, conversation_id,
                     flow_id, principal_id, client_ip, identity_source,
+                    step_id, parent_step_id, flow_step_seq,
                     tags, raw
                 )
                 SELECT
@@ -216,6 +220,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     response_event_id, request_event_id,
                     agent_id, agent_name, user_id, conversation_id,
                     flow_id, principal_id, client_ip, identity_source,
+                    step_id, parent_step_id, flow_step_seq,
                     NULLIF(tags, '')::jsonb, raw::jsonb
                 FROM {staging_table}
                 ON CONFLICT (time, tenant_id, response_event_id) DO NOTHING;
