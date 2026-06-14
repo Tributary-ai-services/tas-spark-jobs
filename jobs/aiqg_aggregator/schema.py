@@ -89,6 +89,10 @@ RESPONSE_DATA = StructType([
     StructField("model", StringType(), True),
     StructField("workflow", StringType(), True),
     StructField("source_app", StringType(), True),
+    # Experiments runner (Phase D) — the experiment + variant that claimed
+    # this request; powers the per-variant /results rollup.
+    StructField("experiment_id", StringType(), True),
+    StructField("experiment_variant", StringType(), True),
     StructField("event_timestamps", EVENT_TIMESTAMPS, True),
     StructField("token_accounting", TOKEN_ACCOUNTING, True),
     StructField("assurance", ASSURANCE, True),
