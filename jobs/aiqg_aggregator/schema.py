@@ -67,6 +67,10 @@ AGENT_CONTEXT = StructType([
     StructField("principal_id", StringType(), True),
     StructField("client_ip", StringType(), True),
     StructField("identity_source", StringType(), True),
+    # linked-tier flow/step topology (tool_call_id echo reconstruction).
+    StructField("step_id", StringType(), True),
+    StructField("parent_step_id", StringType(), True),
+    StructField("flow_step_seq", IntegerType(), True),
 ])
 
 # The data payload of a com.tas.aiqg.response.v1 CloudEvent.
