@@ -9,6 +9,7 @@ typed here. Unknown fields stay in the raw JSON for replay.
 """
 
 from pyspark.sql.types import (
+    BooleanType,
     DoubleType,
     IntegerType,
     LongType,
@@ -71,6 +72,12 @@ AGENT_CONTEXT = StructType([
     StructField("step_id", StringType(), True),
     StructField("parent_step_id", StringType(), True),
     StructField("flow_step_seq", IntegerType(), True),
+    # Attribution drift (Axis-1, Plan #8 — classification-drift.md §3). Declared
+    # agent vs the gateway's inferred surrogate; drift_source = otel|tas_asserted.
+    StructField("agent_declared", StringType(), True),
+    StructField("agent_inferred", StringType(), True),
+    StructField("agent_drift", BooleanType(), True),
+    StructField("drift_source", StringType(), True),
 ])
 
 # The data payload of a com.tas.aiqg.response.v1 CloudEvent.
@@ -89,6 +96,14 @@ RESPONSE_DATA = StructType([
     StructField("model", StringType(), True),
     StructField("workflow", StringType(), True),
     StructField("source_app", StringType(), True),
+    # Classification drift (Axis-1, Plan #8 — classification-drift.md §3).
+    # workflow above is the effective (winner) type; these record the declared
+    # (TAS-Workflow or mapped OTel op) and inferred (heuristic) inputs.
+    StructField("workflow_declared", StringType(), True),
+    StructField("workflow_declared_op", StringType(), True),
+    StructField("workflow_inferred", StringType(), True),
+    StructField("workflow_drift", BooleanType(), True),
+    StructField("otel_map_version", StringType(), True),
     # Experiments runner (Phase D) — the experiment + variant that claimed
     # this request; powers the per-variant /results rollup.
     StructField("experiment_id", StringType(), True),
