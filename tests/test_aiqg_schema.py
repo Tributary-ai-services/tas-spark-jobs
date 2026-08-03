@@ -62,6 +62,20 @@ def test_response_data_has_agent_context():
         _field(ac, name)
 
 
+def test_response_data_has_classification_drift():
+    """Axis-1 workflow drift fields (Plan #8) on the response data."""
+    for name in ('workflow_declared', 'workflow_declared_op', 'workflow_inferred',
+                 'workflow_drift', 'otel_map_version'):
+        _field(RESPONSE_DATA, name)
+
+
+def test_agent_context_has_attribution_drift():
+    """Axis-1 attribution drift fields (Plan #8) on agent_context."""
+    ac = _field(RESPONSE_DATA, 'agent_context').dataType
+    for name in ('agent_declared', 'agent_inferred', 'agent_drift', 'drift_source'):
+        _field(ac, name)
+
+
 def test_production_payload_matches_schema_shape():
     """A captured envelope from tas.aiqg.events.v1 should parse cleanly.
 

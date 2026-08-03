@@ -95,6 +95,13 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.model").alias("model"),
             F.col("ce.data.workflow").alias("workflow"),
             F.col("ce.data.source_app").alias("source_app"),
+            # Classification drift (Axis-1, Plan #8) — declared vs inferred
+            # workflow; NULL when no declared signal.
+            F.col("ce.data.workflow_declared").alias("workflow_declared"),
+            F.col("ce.data.workflow_declared_op").alias("workflow_declared_op"),
+            F.col("ce.data.workflow_inferred").alias("workflow_inferred"),
+            F.col("ce.data.workflow_drift").alias("workflow_drift"),
+            F.col("ce.data.otel_map_version").alias("otel_map_version"),
             F.col("ce.data.experiment_id").alias("experiment_id"),
             F.col("ce.data.experiment_variant").alias("experiment_variant"),
             F.col("ce.data.status").alias("status"),
@@ -133,6 +140,12 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.agent_context.step_id").alias("step_id"),
             F.col("ce.data.agent_context.parent_step_id").alias("parent_step_id"),
             F.col("ce.data.agent_context.flow_step_seq").alias("flow_step_seq"),
+            # Attribution drift (Axis-1, Plan #8) — declared agent vs inferred
+            # surrogate; NULL when no declared agent.
+            F.col("ce.data.agent_context.agent_declared").alias("agent_declared"),
+            F.col("ce.data.agent_context.agent_inferred").alias("agent_inferred"),
+            F.col("ce.data.agent_context.agent_drift").alias("agent_drift"),
+            F.col("ce.data.agent_context.drift_source").alias("drift_source"),
             # Tag findings as raw JSON string — the typed schema can't
             # express a map with arbitrary string keys cleanly, so we
             # extract the sub-object as JSON via path query and cast
@@ -195,6 +208,8 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
             cur.execute(f"""
                 INSERT INTO aiqg.event_metrics (
                     time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
+                    workflow_declared, workflow_declared_op, workflow_inferred,
+                    workflow_drift, otel_map_version,
                     experiment_id, experiment_variant,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
@@ -208,10 +223,13 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     agent_id, agent_name, user_id, conversation_id,
                     flow_id, principal_id, client_ip, identity_source,
                     step_id, parent_step_id, flow_step_seq,
+                    agent_declared, agent_inferred, agent_drift, drift_source,
                     tags, raw
                 )
                 SELECT
                     time, tenant_id, aiqg_account_id, vendor, model, workflow, source_app,
+                    workflow_declared, workflow_declared_op, workflow_inferred,
+                    workflow_drift, otel_map_version,
                     experiment_id, experiment_variant,
                     status, http_status, finish_reason,
                     clear_composite, clear_cost, clear_latency,
@@ -225,6 +243,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     agent_id, agent_name, user_id, conversation_id,
                     flow_id, principal_id, client_ip, identity_source,
                     step_id, parent_step_id, flow_step_seq,
+                    agent_declared, agent_inferred, agent_drift, drift_source,
                     NULLIF(tags, '')::jsonb, raw::jsonb
                 FROM {staging_table}
                 ON CONFLICT (time, tenant_id, response_event_id) DO NOTHING;
