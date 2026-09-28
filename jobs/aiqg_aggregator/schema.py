@@ -32,6 +32,19 @@ TOKEN_ACCOUNTING = StructType([
     StructField("input_cost_usd", DoubleType(), True),
     StructField("output_cost_usd", DoubleType(), True),
     StructField("total_cost_usd", DoubleType(), True),
+    # CLEAR v0.2 cost decomposition (Contract v1, projected basis) --
+    # tas-llm-router/pkg/clear/cost_decomposer.go. Absent on unpriced
+    # traffic, and every USD field is `omitempty` on a float64, so a
+    # genuine zero is omitted rather than sent: reduction_mode is the
+    # discriminator for "this request was decomposed at all".
+    StructField("reduction_mode", StringType(), True),
+    StructField("projected_direct_payload_waste_usd", DoubleType(), True),
+    StructField("projected_reduction_relevance_usd", DoubleType(), True),
+    StructField("projected_reduction_slm_usd", DoubleType(), True),
+    StructField("projected_reduction_combined_usd", DoubleType(), True),
+    StructField("induced_output_waste_estimated_usd", DoubleType(), True),
+    StructField("genuine_post_model_waste_usd", DoubleType(), True),
+    StructField("context_efficiency_ratio", DoubleType(), True),
 ])
 
 ASSURANCE = StructType([
