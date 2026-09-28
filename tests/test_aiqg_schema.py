@@ -54,6 +54,80 @@ def test_response_data_has_token_accounting():
         _field(ta, name)
 
 
+def test_token_accounting_has_cost_decomposition():
+    """CLEAR v0.2 decomposition fields (Contract v1, AIQG-3).
+
+    These land in dedicated aiqg.event_metrics columns via migration 002.
+    A producer rename here silently NULLs those columns -- Spark's
+    from_json() returns NULL for an absent field rather than failing --
+    so the field names are pinned.
+    """
+    ta = _field(RESPONSE_DATA, 'token_accounting').dataType
+    for name in ('reduction_mode',
+                 'projected_direct_payload_waste_usd',
+                 'projected_reduction_relevance_usd',
+                 'projected_reduction_slm_usd',
+                 'projected_reduction_combined_usd',
+                 'induced_output_waste_estimated_usd',
+                 'genuine_post_model_waste_usd',
+                 'context_efficiency_ratio'):
+        _field(ta, name)
+
+
+def test_production_decomposed_token_accounting_is_typed():
+    """A real decomposed token_accounting block from aiqg.event_metrics.
+
+    Captured 2026-09-28 from the live hypertable (the most recent row
+    carrying a non-zero genuine_post_model_waste_usd). Every key here that
+    migration 002 gives a column must be typed in TOKEN_ACCOUNTING, or the
+    aggregator writes NULL into it forever -- Spark's from_json() returns
+    NULL for an absent field instead of failing, so this is exactly the
+    class of drift that fails silently.
+
+    Note what is ABSENT and why: projected_direct_payload_waste_usd and
+    induced_output_waste_estimated_usd are `omitempty` on a float64, so a
+    zero is omitted rather than sent. That is the reason the columns are
+    nullable rather than NOT NULL DEFAULT 0.
+    """
+    block = {
+        "total_tokens": 14008,
+        "prompt_tokens": 14008,
+        "input_cost_usd": 0.007004,
+        "reduction_mode": "projected",
+        "total_cost_usd": 0.007004,
+        "actual_cost_usd": 0.007004,
+        "output_cost_usd": 0,
+        "completion_tokens": 0,
+        "actual_cost_source": "vendor_usage",
+        "model_pricing_version": "pricing-v2026-06-05",
+        "context_efficiency_ratio": 0,
+        "projected_reduction_slm_usd": 0.001751,
+        "genuine_post_model_waste_usd": 0.007004,
+        "projected_reduction_combined_usd": 0.007004,
+        "projected_reduction_relevance_usd": 0.007004,
+        "projected_reduction_slm_confidence": "low",
+        "projected_reduction_relevance_confidence": "medium",
+    }
+    ta = _field(RESPONSE_DATA, 'token_accounting').dataType
+    typed = {f.name for f in ta.fields}
+    stored = {
+        "reduction_mode", "context_efficiency_ratio",
+        "projected_reduction_slm_usd", "genuine_post_model_waste_usd",
+        "projected_reduction_combined_usd", "projected_reduction_relevance_usd",
+    }
+    for name in stored:
+        assert name in block, f"fixture lost {name}; recapture it from the hypertable"
+        assert name in typed, f"production emits token_accounting.{name} but the schema drops it"
+
+    # The bound invariant migration 002 enforces, on this exact row:
+    #   direct + induced + genuine <= total_cost_usd.
+    # It sits exactly ON the bound, which is why the CHECK carries an epsilon.
+    total = (block.get("projected_direct_payload_waste_usd", 0.0)
+             + block.get("induced_output_waste_estimated_usd", 0.0)
+             + block.get("genuine_post_model_waste_usd", 0.0))
+    assert total <= block["total_cost_usd"] + 1e-9
+
+
 def test_response_data_has_agent_context():
     """Identity attribution feeds the per-agent / per-flow rollups."""
     ac = _field(RESPONSE_DATA, 'agent_context').dataType

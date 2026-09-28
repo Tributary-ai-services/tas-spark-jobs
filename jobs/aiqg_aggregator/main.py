@@ -118,6 +118,25 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.token_accounting.completion_tokens").alias("completion_tokens"),
             F.col("ce.data.token_accounting.total_tokens").alias("total_tokens"),
             F.col("ce.data.token_accounting.total_cost_usd").alias("total_cost_usd"),
+            # CLEAR v0.2 cost decomposition (Contract v1, projected basis,
+            # AIQG-3). NULL on unpriced traffic and on any request the gateway
+            # didn't decompose; reduction_mode is the discriminator the
+            # projected-savings queries filter on.
+            F.col("ce.data.token_accounting.reduction_mode").alias("reduction_mode"),
+            F.col("ce.data.token_accounting.projected_direct_payload_waste_usd")
+                .alias("projected_direct_payload_waste_usd"),
+            F.col("ce.data.token_accounting.projected_reduction_relevance_usd")
+                .alias("projected_reduction_relevance_usd"),
+            F.col("ce.data.token_accounting.projected_reduction_slm_usd")
+                .alias("projected_reduction_slm_usd"),
+            F.col("ce.data.token_accounting.projected_reduction_combined_usd")
+                .alias("projected_reduction_combined_usd"),
+            F.col("ce.data.token_accounting.induced_output_waste_estimated_usd")
+                .alias("induced_output_waste_estimated_usd"),
+            F.col("ce.data.token_accounting.genuine_post_model_waste_usd")
+                .alias("genuine_post_model_waste_usd"),
+            F.col("ce.data.token_accounting.context_efficiency_ratio")
+                .alias("context_efficiency_ratio"),
             F.col("ce.data.assurance.inbound_count").alias("assurance_inbound_count"),
             F.col("ce.data.assurance.outbound_count").alias("assurance_outbound_count"),
             F.col("ce.data.assurance.nist_secure_resilient").alias("nist_secure_resilient"),
@@ -216,6 +235,14 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     clear_efficacy, clear_assurance, clear_reliability,
                     end_to_end_ms,
                     prompt_tokens, completion_tokens, total_tokens, total_cost_usd,
+                    reduction_mode,
+                    projected_direct_payload_waste_usd,
+                    projected_reduction_relevance_usd,
+                    projected_reduction_slm_usd,
+                    projected_reduction_combined_usd,
+                    induced_output_waste_estimated_usd,
+                    genuine_post_model_waste_usd,
+                    context_efficiency_ratio,
                     assurance_inbound_count, assurance_outbound_count,
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
@@ -236,6 +263,14 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     clear_efficacy, clear_assurance, clear_reliability,
                     end_to_end_ms,
                     prompt_tokens, completion_tokens, total_tokens, total_cost_usd,
+                    reduction_mode,
+                    projected_direct_payload_waste_usd,
+                    projected_reduction_relevance_usd,
+                    projected_reduction_slm_usd,
+                    projected_reduction_combined_usd,
+                    induced_output_waste_estimated_usd,
+                    genuine_post_model_waste_usd,
+                    context_efficiency_ratio,
                     assurance_inbound_count, assurance_outbound_count,
                     nist_secure_resilient, nist_privacy_enhanced,
                     nist_valid_reliable, nist_safe,
