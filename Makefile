@@ -1,14 +1,26 @@
 IMAGE_NAME := registry-api.tas.scharber.com/tas-spark-jobs
-SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
+
+# One source of truth for the version (semver, see CLAUDE.md "Versioning &
+# Release Policy"). The image tag IS the version; there is no :latest and no
+# bare-sha tag, because a floating tag means "we cannot tell you what is
+# running".
+VERSION  := $(shell cat VERSION)
+REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+CREATED  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: build push deploy test lint
 
 build:
-	docker build -t $(IMAGE_NAME):$(SHA) -t $(IMAGE_NAME):latest .
+	docker build \
+		--label org.opencontainers.image.version=$(VERSION) \
+		--label org.opencontainers.image.revision=$(REVISION) \
+		--label org.opencontainers.image.created=$(CREATED) \
+		-t $(IMAGE_NAME):$(VERSION) .
 
 push: build
-	docker push $(IMAGE_NAME):$(SHA)
-	docker push $(IMAGE_NAME):latest
+	docker push $(IMAGE_NAME):$(VERSION)
+	@echo "Pin the manifest to the digest, not just the tag:"
+	@docker inspect --format '{{index .RepoDigests 0}}' $(IMAGE_NAME):$(VERSION)
 
 deploy:
 	kubectl apply -f ../aether-shared/k8s-shared-infrastructure/spark/events-aggregator-sparkapp.yaml
