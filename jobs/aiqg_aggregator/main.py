@@ -118,6 +118,21 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.col("ce.data.token_accounting.completion_tokens").alias("completion_tokens"),
             F.col("ce.data.token_accounting.total_tokens").alias("total_tokens"),
             F.col("ce.data.token_accounting.total_cost_usd").alias("total_cost_usd"),
+            # Cache-aware cost (AIQG-47). NULL when the vendor reported no
+            # cache tokens; readers use COALESCE(cache_aware_total_cost_usd,
+            # total_cost_usd).
+            F.col("ce.data.token_accounting.model_pricing_version")
+                .alias("model_pricing_version"),
+            F.col("ce.data.token_accounting.cache_creation_tokens")
+                .alias("cache_creation_tokens"),
+            F.col("ce.data.token_accounting.cache_read_tokens")
+                .alias("cache_read_tokens"),
+            F.col("ce.data.token_accounting.cache_creation_cost_usd")
+                .alias("cache_creation_cost_usd"),
+            F.col("ce.data.token_accounting.cache_read_cost_usd")
+                .alias("cache_read_cost_usd"),
+            F.col("ce.data.token_accounting.cache_aware_total_cost_usd")
+                .alias("cache_aware_total_cost_usd"),
             # CLEAR v0.2 cost decomposition (Contract v1, projected basis,
             # AIQG-3). NULL on unpriced traffic and on any request the gateway
             # didn't decompose; reduction_mode is the discriminator the
@@ -235,6 +250,10 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     clear_efficacy, clear_assurance, clear_reliability,
                     end_to_end_ms,
                     prompt_tokens, completion_tokens, total_tokens, total_cost_usd,
+                    model_pricing_version,
+                    cache_creation_tokens, cache_read_tokens,
+                    cache_creation_cost_usd, cache_read_cost_usd,
+                    cache_aware_total_cost_usd,
                     reduction_mode,
                     projected_direct_payload_waste_usd,
                     projected_reduction_relevance_usd,
@@ -263,6 +282,10 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     clear_efficacy, clear_assurance, clear_reliability,
                     end_to_end_ms,
                     prompt_tokens, completion_tokens, total_tokens, total_cost_usd,
+                    model_pricing_version,
+                    cache_creation_tokens, cache_read_tokens,
+                    cache_creation_cost_usd, cache_read_cost_usd,
+                    cache_aware_total_cost_usd,
                     reduction_mode,
                     projected_direct_payload_waste_usd,
                     projected_reduction_relevance_usd,
