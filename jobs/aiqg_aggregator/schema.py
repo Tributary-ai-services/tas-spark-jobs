@@ -32,6 +32,18 @@ TOKEN_ACCOUNTING = StructType([
     StructField("input_cost_usd", DoubleType(), True),
     StructField("output_cost_usd", DoubleType(), True),
     StructField("total_cost_usd", DoubleType(), True),
+    # Pricing table that priced this row (AIQG-47). Present on priced traffic.
+    StructField("model_pricing_version", StringType(), True),
+    # Cache accounting (AIQG-41 / AIQG-47) -- tas-llm-router
+    # pkg/aiqg/events/event.go. All `omitempty`: absent when the vendor
+    # reported no cache tokens, so NULL means "no cache activity", not zero.
+    # total_cost_usd above stays the legacy uncached-input+output figure;
+    # cache_aware_total_cost_usd is what the vendor actually bills.
+    StructField("cache_creation_tokens", IntegerType(), True),
+    StructField("cache_read_tokens", IntegerType(), True),
+    StructField("cache_creation_cost_usd", DoubleType(), True),
+    StructField("cache_read_cost_usd", DoubleType(), True),
+    StructField("cache_aware_total_cost_usd", DoubleType(), True),
     # CLEAR v0.2 cost decomposition (Contract v1, projected basis) --
     # tas-llm-router/pkg/clear/cost_decomposer.go. Absent on unpriced
     # traffic, and every USD field is `omitempty` on a float64, so a

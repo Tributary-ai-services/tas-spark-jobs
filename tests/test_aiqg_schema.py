@@ -128,6 +128,81 @@ def test_production_decomposed_token_accounting_is_typed():
     assert total <= block["total_cost_usd"] + 1e-9
 
 
+def test_token_accounting_has_cache_aware_cost():
+    """Cache accounting + pricing version (AIQG-41 / AIQG-47).
+
+    These land in dedicated aiqg.event_metrics columns via migration 003.
+    from_json() returns NULL for a field absent from the schema instead of
+    failing, so a producer rename or a forgotten field silently NULLs the
+    column forever -- the field names are pinned.
+    """
+    ta = _field(RESPONSE_DATA, 'token_accounting').dataType
+    for name in ('model_pricing_version',
+                 'cache_creation_tokens',
+                 'cache_read_tokens',
+                 'cache_creation_cost_usd',
+                 'cache_read_cost_usd',
+                 'cache_aware_total_cost_usd'):
+        _field(ta, name)
+
+
+def test_production_cached_token_accounting_is_typed():
+    """A real cached token_accounting block from aiqg.event_metrics.
+
+    Captured 2026-10-07 from the live hypertable (a claude-sonnet-5-5 request
+    with 68,370 cache-read tokens). Every key migration 003 gives a column
+    must be typed in TOKEN_ACCOUNTING, or the aggregator writes NULL into it
+    forever.
+
+    Note what is ABSENT: cache_creation_* -- `omitempty`, and this request
+    wrote nothing to the cache. That is why the columns are nullable rather
+    than NOT NULL DEFAULT 0.
+    """
+    block = {
+        "total_tokens": 74454,
+        "prompt_tokens": 74454,
+        "input_cost_usd": 0.14890799999999998,
+        "total_cost_usd": 0.14890799999999998,
+        "output_cost_usd": 0,
+        "cache_read_tokens": 68370,
+        "completion_tokens": 0,
+        "cache_read_cost_usd": 0.013674,
+        "model_pricing_version": "pricing-v2026-10-06.1",
+        "cache_aware_total_cost_usd": 0.16258199999999998,
+    }
+    ta = _field(RESPONSE_DATA, 'token_accounting').dataType
+    typed = {f.name for f in ta.fields}
+    stored = {"model_pricing_version", "cache_read_tokens",
+              "cache_read_cost_usd", "cache_aware_total_cost_usd"}
+    for name in stored:
+        assert name in block, f"fixture lost {name}; recapture it from the hypertable"
+        assert name in typed, f"production emits token_accounting.{name} but the schema drops it"
+
+    # The identity the gateway computes (pkg/clear/cost.go CacheAwareCost):
+    # prompt_tokens is the vendor's input_tokens, EXCLUSIVE of cache tokens, so
+    # the cache-aware total is legacy total + cache read + cache creation.
+    expected = (block["total_cost_usd"]
+                + block.get("cache_creation_cost_usd", 0.0)
+                + block["cache_read_cost_usd"])
+    assert abs(block["cache_aware_total_cost_usd"] - expected) < 1e-9
+
+
+def test_aggregator_upsert_lists_every_cache_column():
+    """The column list is written twice in write_batch (INSERT and SELECT).
+
+    A column added to one list and not the other fails at runtime in the
+    foreachBatch, not at import, so check both here.
+    """
+    import re
+    src = open(os.path.join(os.path.dirname(__file__), '..',
+                            'jobs', 'aiqg_aggregator', 'main.py')).read()
+    for col in ('model_pricing_version', 'cache_creation_tokens',
+                'cache_read_tokens', 'cache_creation_cost_usd',
+                'cache_read_cost_usd', 'cache_aware_total_cost_usd'):
+        # once as a projection alias, twice in the upsert SQL
+        assert len(re.findall(rf'\b{col}\b', src)) >= 3, f"{col} not wired through main.py"
+
+
 def test_response_data_has_agent_context():
     """Identity attribution feeds the per-agent / per-flow rollups."""
     ac = _field(RESPONSE_DATA, 'agent_context').dataType
