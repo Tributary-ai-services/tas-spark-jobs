@@ -289,3 +289,46 @@ def test_production_payload_matches_schema_shape():
         assert k in data_fields, f"production data.{k} missing from RESPONSE_DATA schema"
     # round-trip JSON serialization sanity
     assert json.loads(json.dumps(sample))["data"]["clear_scores"]["composite"] == 92
+
+
+def test_response_data_has_token_owner():
+    """Plan #22 P1: the authenticated "who" (tas-llm-router 5.119.0-rc.3).
+
+    Mapped to aiqg.event_metrics.token_id / owner_sub (TimescaleDB migration
+    007 in aether-shared). Both nullable: older gateways and unowned tokens
+    send neither.
+    """
+    for name in ('tas_auth_token_id', 'token_owner_sub'):
+        f = _field(RESPONSE_DATA, name)
+        assert f.nullable
+
+
+def _aiqg_main_source():
+    path = os.path.join(os.path.dirname(__file__), '..', 'jobs', 'aiqg_aggregator', 'main.py')
+    with open(path) as fh:
+        return fh.read()
+
+
+def test_writer_maps_and_inserts_token_owner():
+    """The select maps both fields and the INSERT names both columns.
+
+    A column in the INSERT list without a SELECT expression (or the reverse)
+    fails every batch, so check the two lists stay the same length too.
+    """
+    src = _aiqg_main_source()
+    assert 'F.col("ce.data.tas_auth_token_id").alias("token_id")' in src
+    assert 'F.col("ce.data.token_owner_sub").alias("owner_sub")' in src
+    insert = src.split('INSERT INTO aiqg.event_metrics (')[1].split(')')[0]
+    assert 'token_id, owner_sub' in insert
+
+
+def test_uuid_guard_regex():
+    """token_id is UUID in Timescale; a non-UUID id must become NULL, not abort the batch."""
+    import re
+    src = _aiqg_main_source()
+    pattern = re.search(r'UUID_RE = "([^"]+)"', src).group(1)
+    rx = re.compile(pattern, re.IGNORECASE)  # SQL uses ~* (case-insensitive)
+    assert rx.match('8f29197c-818b-4b69-bf59-200f5c3228f5')
+    assert rx.match('8F29197C-818B-4B69-BF59-200F5C3228F5')
+    for bad in ('', 'tok-1', '8f29197c818b4b69bf59200f5c3228f5', "x'; drop table t; --"):
+        assert not rx.match(bad), bad

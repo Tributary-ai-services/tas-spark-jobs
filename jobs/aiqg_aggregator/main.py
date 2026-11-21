@@ -25,6 +25,10 @@ from pyspark.sql import functions as F
 
 from schema import AIQG_RESPONSE_ENVELOPE
 
+# Canonical UUID text, case-insensitive (used with ~*). event_metrics.token_id
+# is UUID; a value that is not one is stored NULL instead of failing the batch.
+UUID_RE = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
 
 def get_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
@@ -91,6 +95,11 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
             F.coalesce(F.col("ce.time"), F.col("kafka_ts")).alias("time"),
             F.col("ce.data.tenant_id").alias("tenant_id"),
             F.col("ce.data.aiqg_account_id").alias("aiqg_account_id"),
+            # Plan #22 P1: authenticated "who" (event_metrics.token_id /
+            # owner_sub, TimescaleDB migration 007). Kept apart from
+            # agent_context.user_id, which the caller asserts.
+            F.col("ce.data.tas_auth_token_id").alias("token_id"),
+            F.col("ce.data.token_owner_sub").alias("owner_sub"),
             F.col("ce.data.vendor").alias("vendor"),
             F.col("ce.data.model").alias("model"),
             F.col("ce.data.workflow").alias("workflow"),
@@ -270,6 +279,7 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     flow_id, principal_id, client_ip, identity_source,
                     step_id, parent_step_id, flow_step_seq,
                     agent_declared, agent_inferred, agent_drift, drift_source,
+                    token_id, owner_sub,
                     tags, raw
                 )
                 SELECT
@@ -302,6 +312,11 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
                     flow_id, principal_id, client_ip, identity_source,
                     step_id, parent_step_id, flow_step_seq,
                     agent_declared, agent_inferred, agent_drift, drift_source,
+                    -- token_id is UUID in the hypertable; anything else (a
+                    -- hand-written MapResolver id) is stored NULL rather than
+                    -- failing the whole batch on a bad cast.
+                    CASE WHEN token_id ~* '{UUID_RE}' THEN token_id::uuid END,
+                    NULLIF(owner_sub, ''),
                     NULLIF(tags, '')::jsonb, raw::jsonb
                 FROM {staging_table}
                 ON CONFLICT (time, tenant_id, response_event_id) DO NOTHING;

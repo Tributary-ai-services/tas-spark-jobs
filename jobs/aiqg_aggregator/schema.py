@@ -111,6 +111,11 @@ RESPONSE_DATA = StructType([
     StructField("request_event_id", StringType(), True),
     StructField("tenant_id", StringType(), True),
     StructField("aiqg_account_id", StringType(), True),
+    # Plan #22 P1 (tas-llm-router 5.119.0-rc.3): the token that authenticated
+    # the request and the Keycloak sub of the person who issued it. Absent on
+    # older gateways and for unowned tokens.
+    StructField("tas_auth_token_id", StringType(), True),
+    StructField("token_owner_sub", StringType(), True),
     StructField("status", StringType(), True),
     StructField("http_status", IntegerType(), True),
     StructField("finish_reason", StringType(), True),
