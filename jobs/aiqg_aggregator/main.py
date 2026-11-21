@@ -1,10 +1,15 @@
 """
 AIQG Aggregator — Spark Structured Streaming job.
 
-Reads CloudEvents from the tas.aiqg.events.v1 Kafka topic, filters to
-com.tas.aiqg.response.v1, and upserts scalar metrics into the
-aiqg.event_metrics hypertable in TimescaleDB. The 1m / 1h continuous
-aggregates are computed in-database by TimescaleDB policies.
+Reads CloudEvents from the tas.aiqg.events.v1 Kafka topic and runs two
+streaming queries over it:
+
+- com.tas.aiqg.response.v1 -> upserts scalar metrics into the
+  aiqg.event_metrics hypertable in TimescaleDB.
+- com.tas.aiqg.tool_call.v1 -> aiqg.tool_call_events, merging the proxy's
+  and the gateway's sighting of one call into one row (tool_calls.py).
+
+The continuous aggregates are computed in-database by TimescaleDB policies.
 
 Why a separate job from events_aggregator:
 - AIQG envelopes use a rich nested data{} payload (CLEAR scores,
@@ -15,7 +20,12 @@ Why a separate job from events_aggregator:
 - Independent consumer group + checkpoint so back-pressure tuning
   can diverge without coupling.
 
-Consumer group: spark-aiqg-aggregator.
+Consumer groups: spark-aiqg-aggregator (responses) and
+spark-aiqg-aggregator-tool-calls (tool calls). Each query has its own group
+and checkpoint, so their offsets advance independently. A failure in either
+query stops the job (awaitAnyTermination) so it restarts loudly rather than
+losing tool calls silently; aiqg.tool_call_events (aether-shared migration
+009) must therefore exist before this version deploys.
 """
 
 import os
@@ -24,6 +34,8 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 
 from schema import AIQG_RESPONSE_ENVELOPE
+from tool_calls import apply_batch as apply_tool_call_batch
+from tool_calls import parse_tool_call_envelopes
 
 # Canonical UUID text, case-insensitive (used with ~*). event_metrics.token_id
 # is UUID; a value that is not one is stored NULL instead of failing the batch.
@@ -49,7 +61,7 @@ def create_spark_session() -> SparkSession:
     )
 
 
-def read_kafka(spark: SparkSession) -> DataFrame:
+def read_kafka(spark: SparkSession, group_id: str = "spark-aiqg-aggregator") -> DataFrame:
     """Subscribe to the AIQG events topic.
 
     AIQG_TOPIC defaults to the v1 topic. The schema is versioned in the
@@ -62,7 +74,7 @@ def read_kafka(spark: SparkSession) -> DataFrame:
         .option("kafka.bootstrap.servers", get_env("KAFKA_BOOTSTRAP", "localhost:9092"))
         .option("subscribe", get_env("AIQG_TOPIC", "tas.aiqg.events.v1"))
         .option("startingOffsets", get_env("STARTING_OFFSETS", "latest"))
-        .option("kafka.group.id", "spark-aiqg-aggregator")
+        .option("kafka.group.id", group_id)
         .option("failOnDataLoss", "false")
         .load()
     )
@@ -200,27 +212,18 @@ def parse_response_envelopes(kafka_df: DataFrame) -> DataFrame:
     )
 
 
-def write_batch(batch_df: DataFrame, batch_id: int) -> None:
-    """Stage + INSERT ... ON CONFLICT DO NOTHING into aiqg.event_metrics.
-
-    Same pattern as events_aggregator.write_raw_batch: stream the batch
-    to a temp table via JDBC, then a single upsert SQL pulls it into
-    the hypertable. ON CONFLICT DO NOTHING because foreachBatch is
-    at-least-once — a retry must be idempotent. The PK
-    (time, tenant_id, response_event_id) makes the dedupe deterministic.
-    """
-    if batch_df.isEmpty():
-        return
-
+def _jdbc():
     jdbc_url = get_env("JDBC_URL", "jdbc:postgresql://localhost:5432/tas_events")
     jdbc_props = {
         "user": get_env("JDBC_USER", "tas_events_rw"),
         "password": get_env("JDBC_PASSWORD", "taseventspass"),
         "driver": "org.postgresql.Driver",
     }
+    return jdbc_url, jdbc_props
 
-    staging_table = f"aiqg_event_metrics_stage_{batch_id}"
 
+def _stage(batch_df: DataFrame, staging_table: str, jdbc_url: str, jdbc_props: dict) -> None:
+    """Write a micro-batch to a plain staging table via JDBC."""
     (
         batch_df.write
         .format("jdbc")
@@ -234,6 +237,8 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
         .save()
     )
 
+
+def _pg_connect(jdbc_url: str, jdbc_props: dict):
     import psycopg2
 
     jdbc_parts = jdbc_url.replace("jdbc:postgresql://", "").split("/")
@@ -241,11 +246,29 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
     host = host_port[0]
     port = host_port[1] if len(host_port) > 1 else "5432"
     dbname = jdbc_parts[1] if len(jdbc_parts) > 1 else "tas_events"
-
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=host, port=port, dbname=dbname,
         user=jdbc_props["user"], password=jdbc_props["password"],
     )
+
+
+def write_batch(batch_df: DataFrame, batch_id: int) -> None:
+    """Stage + INSERT ... ON CONFLICT DO NOTHING into aiqg.event_metrics.
+
+    Same pattern as events_aggregator.write_raw_batch: stream the batch
+    to a temp table via JDBC, then a single upsert SQL pulls it into
+    the hypertable. ON CONFLICT DO NOTHING because foreachBatch is
+    at-least-once — a retry must be idempotent. The PK
+    (time, tenant_id, response_event_id) makes the dedupe deterministic.
+    """
+    if batch_df.isEmpty():
+        return
+
+    jdbc_url, jdbc_props = _jdbc()
+    staging_table = f"aiqg_event_metrics_stage_{batch_id}"
+    _stage(batch_df, staging_table, jdbc_url, jdbc_props)
+
+    conn = _pg_connect(jdbc_url, jdbc_props)
     try:
         with conn.cursor() as cur:
             cur.execute(f"""
@@ -327,6 +350,27 @@ def write_batch(batch_df: DataFrame, batch_id: int) -> None:
         conn.close()
 
 
+def write_tool_call_batch(batch_df: DataFrame, batch_id: int) -> None:
+    """Stage a tool-call batch, then merge it into aiqg.tool_call_events.
+
+    The merge (proxy + gateway sightings of one call -> one row) runs in one
+    transaction; see tool_calls.py for the rules. At-least-once safe: a retried
+    batch merges into the rows it already wrote and changes nothing.
+    """
+    if batch_df.isEmpty():
+        return
+
+    jdbc_url, jdbc_props = _jdbc()
+    staging_table = f"aiqg_tool_call_stage_{batch_id}"
+    _stage(batch_df, staging_table, jdbc_url, jdbc_props)
+
+    conn = _pg_connect(jdbc_url, jdbc_props)
+    try:
+        apply_tool_call_batch(conn, staging_table)
+    finally:
+        conn.close()
+
+
 def main():
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
@@ -334,7 +378,7 @@ def main():
     kafka_df = read_kafka(spark)
     parsed = parse_response_envelopes(kafka_df)
 
-    query = (
+    (
         parsed.writeStream
         .foreachBatch(write_batch)
         .option("checkpointLocation",
@@ -343,7 +387,18 @@ def main():
         .start()
     )
 
-    query.awaitTermination()
+    tool_calls = parse_tool_call_envelopes(read_kafka(spark, "spark-aiqg-aggregator-tool-calls"))
+    (
+        tool_calls.writeStream
+        .foreachBatch(write_tool_call_batch)
+        .option("checkpointLocation",
+                get_env("CHECKPOINT_LOCATION", "/tmp/spark-checkpoints/aiqg-aggregator") + "/tool_calls/")
+        .trigger(processingTime="30 seconds")
+        .start()
+    )
+
+    # Either query failing stops the job, so the operator restarts it.
+    spark.streams.awaitAnyTermination()
 
 
 if __name__ == "__main__":
