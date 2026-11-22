@@ -157,3 +157,47 @@ AIQG_RESPONSE_ENVELOPE = StructType([
     StructField("datacontenttype", StringType(), True),
     StructField("data", RESPONSE_DATA, True),
 ])
+
+
+# The data payload of a com.tas.aiqg.tool_call.v1 CloudEvent (Plan #22 T.2 /
+# T.5; design org-structure-and-attribution.md §9.5). Emitted by the MCP proxy
+# (tas-mcp, observed_by="proxy") and the LLM gateway (tas-llm-router,
+# observed_by="gateway") on the same tas.aiqg.events.v1 topic. Written to
+# aiqg.tool_call_events (aether-shared TimescaleDB migration 009).
+#
+# `findings` ({"<pattern category>": count}) is a map with arbitrary keys, so
+# it is not typed here: the writer extracts it from the raw JSON, as it does
+# for the response event's tag_findings.
+TOOL_CALL_DATA = StructType([
+    StructField("tenant_id", StringType(), True),
+    StructField("token_id", StringType(), True),
+    StructField("owner_sub", StringType(), True),
+    StructField("user_id", StringType(), True),
+    StructField("agent_id", StringType(), True),
+    StructField("source_app", StringType(), True),
+    StructField("flow_id", StringType(), True),
+    StructField("step_id", StringType(), True),
+    StructField("tool_call_id", StringType(), True),
+    StructField("tool_name", StringType(), True),
+    # NULL = the call did not go through the proxy.
+    StructField("server_id", StringType(), True),
+    StructField("observed_by", StringType(), True),
+    StructField("outcome", StringType(), True),
+    StructField("duration_ms", LongType(), True),
+    StructField("round_trip_ms", LongType(), True),
+    StructField("result_bytes", LongType(), True),
+    StructField("result_tokens_est", LongType(), True),
+    StructField("reduced_bytes", LongType(), True),
+    StructField("scan_skipped", BooleanType(), True),
+    StructField("occurred_at", TimestampType(), True),
+])
+
+AIQG_TOOL_CALL_ENVELOPE = StructType([
+    StructField("specversion", StringType(), False),
+    StructField("type", StringType(), False),
+    StructField("source", StringType(), True),
+    StructField("id", StringType(), True),
+    StructField("time", TimestampType(), True),
+    StructField("datacontenttype", StringType(), True),
+    StructField("data", TOOL_CALL_DATA, True),
+])
