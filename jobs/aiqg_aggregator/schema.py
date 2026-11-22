@@ -9,6 +9,7 @@ typed here. Unknown fields stay in the raw JSON for replay.
 """
 
 from pyspark.sql.types import (
+    ArrayType,
     BooleanType,
     DoubleType,
     IntegerType,
@@ -200,4 +201,41 @@ AIQG_TOOL_CALL_ENVELOPE = StructType([
     StructField("time", TimestampType(), True),
     StructField("datacontenttype", StringType(), True),
     StructField("data", TOOL_CALL_DATA, True),
+])
+
+
+# Tool catalogue snapshots (Plan #22 T.6/T.7, design §9.5 "Never called"),
+# written to aiqg.tool_catalogue (aether-shared migration 009). Two sources on
+# tas.aiqg.events.v1, parsed by one schema:
+#
+#   * com.tas.aiqg.tool_catalogue.v1 from the MCP proxy: one event per server
+#     per hour, its tools/list in `tools`.
+#   * com.tas.aiqg.response.v1 from the LLM gateway: `tools_offered`, the
+#     request's toolset, present once per toolset per tenant per hour per
+#     replica (tas-llm-router#284). `tools_schema_bytes` rides on every
+#     response; it is not a catalogue row and is not read here.
+#
+# Sizes are LongType so an out-of-range value is NULLed by the writer's range
+# check instead of wrapping in a Spark cast to int. snapshot_at is text and
+# parsed by the writer, so a malformed time drops one event, not the record.
+OFFERED_TOOL = StructType([
+    StructField("name", StringType(), True),
+    StructField("schema_bytes", LongType(), True),
+])
+
+TOOL_CATALOGUE_DATA = StructType([
+    StructField("snapshot_at", StringType(), True),
+    StructField("server_id", StringType(), True),
+    StructField("observed_by", StringType(), True),
+    StructField("tenant_id", StringType(), True),
+    StructField("tools", ArrayType(OFFERED_TOOL), True),
+    StructField("tools_offered", ArrayType(OFFERED_TOOL), True),
+])
+
+AIQG_TOOL_CATALOGUE_ENVELOPE = StructType([
+    StructField("specversion", StringType(), False),
+    StructField("type", StringType(), False),
+    StructField("id", StringType(), True),
+    StructField("time", TimestampType(), True),
+    StructField("data", TOOL_CATALOGUE_DATA, True),
 ])

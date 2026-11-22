@@ -1,13 +1,16 @@
 """
 AIQG Aggregator — Spark Structured Streaming job.
 
-Reads CloudEvents from the tas.aiqg.events.v1 Kafka topic and runs two
+Reads CloudEvents from the tas.aiqg.events.v1 Kafka topic and runs three
 streaming queries over it:
 
 - com.tas.aiqg.response.v1 -> upserts scalar metrics into the
   aiqg.event_metrics hypertable in TimescaleDB.
 - com.tas.aiqg.tool_call.v1 -> aiqg.tool_call_events, merging the proxy's
   and the gateway's sighting of one call into one row (tool_calls.py).
+- com.tas.aiqg.tool_catalogue.v1 (proxy) and the tools_offered list on
+  com.tas.aiqg.response.v1 (gateway) -> aiqg.tool_catalogue, one row per
+  offered tool per hour (tool_catalogue.py).
 
 The continuous aggregates are computed in-database by TimescaleDB policies.
 
@@ -20,12 +23,26 @@ Why a separate job from events_aggregator:
 - Independent consumer group + checkpoint so back-pressure tuning
   can diverge without coupling.
 
-Consumer groups: spark-aiqg-aggregator (responses) and
-spark-aiqg-aggregator-tool-calls (tool calls). Each query has its own group
-and checkpoint, so their offsets advance independently. A failure in either
+Consumer groups: spark-aiqg-aggregator (responses),
+spark-aiqg-aggregator-tool-calls (tool calls) and
+spark-aiqg-aggregator-tool-catalogue (catalogue). Each query has its own group
+and checkpoint, so their offsets advance independently. A failure in any
 query stops the job (awaitAnyTermination) so it restarts loudly rather than
-losing tool calls silently; aiqg.tool_call_events (aether-shared migration
-009) must therefore exist before this version deploys.
+losing rows silently; aiqg.tool_call_events and aiqg.tool_catalogue
+(aether-shared migration 009) must therefore exist before this version deploys.
+
+Why the catalogue is its own query and not folded into the response query,
+although the gateway half of it rides on response events:
+- The response query's projection to event_metrics stays byte-for-byte as it
+  was. Exploding tools_offered inside write_batch would put a second table
+  write into the transaction that event_metrics depends on, and make a
+  catalogue problem replay event_metrics batches.
+- The proxy half (tool_catalogue.v1) is not a response event at all, so a
+  fold-in would split one table's writer across two queries. One query per
+  target table keeps each table's ordering, dedupe and checkpoint in one place.
+- The cost is one more Kafka consumer over the same topic, which at this
+  topic's volume is negligible. Stop-on-failure is unchanged: the job still
+  waits on any query.
 """
 
 import os
@@ -36,6 +53,8 @@ from pyspark.sql import functions as F
 from schema import AIQG_RESPONSE_ENVELOPE
 from tool_calls import apply_batch as apply_tool_call_batch
 from tool_calls import parse_tool_call_envelopes
+from tool_catalogue import apply_batch as apply_tool_catalogue_batch
+from tool_catalogue import parse_tool_catalogue_envelopes
 
 # Canonical UUID text, case-insensitive (used with ~*). event_metrics.token_id
 # is UUID; a value that is not one is stored NULL instead of failing the batch.
@@ -371,6 +390,25 @@ def write_tool_call_batch(batch_df: DataFrame, batch_id: int) -> None:
         conn.close()
 
 
+def write_tool_catalogue_batch(batch_df: DataFrame, batch_id: int) -> None:
+    """Stage a catalogue batch, then INSERT ... ON CONFLICT DO NOTHING it into
+    aiqg.tool_catalogue. Re-delivery and repeats across gateway replicas are
+    no-ops on the snapshot key; see tool_catalogue.py.
+    """
+    if batch_df.isEmpty():
+        return
+
+    jdbc_url, jdbc_props = _jdbc()
+    staging_table = f"aiqg_tool_catalogue_stage_{batch_id}"
+    _stage(batch_df, staging_table, jdbc_url, jdbc_props)
+
+    conn = _pg_connect(jdbc_url, jdbc_props)
+    try:
+        apply_tool_catalogue_batch(conn, staging_table)
+    finally:
+        conn.close()
+
+
 def main():
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
@@ -397,7 +435,17 @@ def main():
         .start()
     )
 
-    # Either query failing stops the job, so the operator restarts it.
+    catalogue = parse_tool_catalogue_envelopes(read_kafka(spark, "spark-aiqg-aggregator-tool-catalogue"))
+    (
+        catalogue.writeStream
+        .foreachBatch(write_tool_catalogue_batch)
+        .option("checkpointLocation",
+                get_env("CHECKPOINT_LOCATION", "/tmp/spark-checkpoints/aiqg-aggregator") + "/tool_catalogue/")
+        .trigger(processingTime="30 seconds")
+        .start()
+    )
+
+    # Any query failing stops the job, so the operator restarts it.
     spark.streams.awaitAnyTermination()
 
 
