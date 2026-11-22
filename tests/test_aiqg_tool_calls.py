@@ -164,7 +164,7 @@ def test_parse_projects_contract(spark):
 def test_parse_drops_what_the_table_would_reject(spark):
     out = _parse(spark, [
         _event(type='com.tas.aiqg.response.v1'),
-        _event(data={'tenant_id': None}),
+        _event(data={'tenant_id': None, 'observed_by': 'gateway'}),
         _event(data={'tool_name': ''}),
         _event(data={'observed_by': 'both'}),     # only the writer may say 'both'
         _event(data={'outcome': 'success'}),
@@ -172,6 +172,15 @@ def test_parse_drops_what_the_table_would_reject(spark):
         _event(id='keep'),
     ])
     assert [r['event_id'] for r in out] == ['keep']
+
+
+def test_parse_keeps_untokened_proxy_calls_as_unattributed(spark):
+    out = _parse(spark, [
+        _event(id='p1', data={'tenant_id': None, 'token_id': None, 'owner_sub': None, 'observed_by': 'proxy'}),
+        _event(id='p2', data={'tenant_id': '', 'observed_by': 'proxy'}),
+    ])
+    assert sorted(r['event_id'] for r in out) == ['p1', 'p2']
+    assert {r['tenant_id'] for r in out} == {tc.UNATTRIBUTED}
 
 
 def test_parse_time_falls_back_to_ce_time_then_kafka(spark):

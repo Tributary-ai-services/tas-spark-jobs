@@ -50,6 +50,9 @@ from pyspark.sql import functions as F
 from schema import AIQG_TOOL_CALL_ENVELOPE
 
 TOOL_CALL_TYPE = "com.tas.aiqg.tool_call.v1"
+
+# Tenant of a proxy call made without a valid token (operator-only view).
+UNATTRIBUTED = "(unattributed)"
 OBSERVED_BY = ("proxy", "gateway")
 OUTCOMES = ("ok", "tool_error", "timeout", "unreachable", "blocked", "no_result")
 
@@ -85,9 +88,15 @@ _PLAIN = tuple(c for c in COLUMNS if c not in (
 def parse_tool_call_envelopes(kafka_df: DataFrame) -> DataFrame:
     """Project com.tas.aiqg.tool_call.v1 envelopes to tool_call_events columns.
 
-    Dropped, like a response event without its PK: no tenant_id, no tool_name,
-    no CloudEvent id, or an observed_by / outcome outside the contract (the
-    table's CHECK constraints would otherwise fail the whole batch).
+    Dropped, like a response event without its PK: no tool_name, no CloudEvent
+    id, or an observed_by / outcome outside the contract (the table's CHECK
+    constraints would otherwise fail the whole batch), and a gateway event with
+    no tenant_id (the gateway always authenticates first).
+
+    A proxy event with no tenant_id is a call made without a valid TAS-Auth
+    token. The proxy serves those (observe mode, design §9.5), and they are
+    kept under the tenant UNATTRIBUTED for the operator-only view, not
+    dropped: an untokened caller is exactly what that view exists to show.
     """
     return (
         kafka_df
@@ -99,14 +108,17 @@ def parse_tool_call_envelopes(kafka_df: DataFrame) -> DataFrame:
         .filter(F.col("ce.specversion") == "1.0")
         .filter(F.col("ce.type") == TOOL_CALL_TYPE)
         .filter(F.col("ce.id").isNotNull() & (F.col("ce.id") != ""))
-        .filter(F.col("ce.data.tenant_id").isNotNull() & (F.col("ce.data.tenant_id") != ""))
+        .withColumn("_tenant", F.when((F.col("ce.data.tenant_id").isNull()) | (F.col("ce.data.tenant_id") == ""),
+                                      F.when(F.col("ce.data.observed_by") == "proxy", F.lit(UNATTRIBUTED)))
+                                .otherwise(F.col("ce.data.tenant_id")))
+        .filter(F.col("_tenant").isNotNull())
         .filter(F.col("ce.data.tool_name").isNotNull() & (F.col("ce.data.tool_name") != ""))
         .filter(F.col("ce.data.observed_by").isin(*OBSERVED_BY))
         .filter(F.col("ce.data.outcome").isin(*OUTCOMES))
         .select(
             F.coalesce(F.col("ce.data.occurred_at"), F.col("ce.time"), F.col("kafka_ts"))
              .alias("occurred_at"),
-            F.col("ce.data.tenant_id").alias("tenant_id"),
+            F.col("_tenant").alias("tenant_id"),
             F.col("ce.id").alias("event_id"),
             F.col("ce.data.token_id").alias("token_id"),
             F.col("ce.data.owner_sub").alias("owner_sub"),
