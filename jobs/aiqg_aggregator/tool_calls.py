@@ -26,11 +26,16 @@ So each batch, for incoming rows that carry a tool_call_id:
 Rows without a tool_call_id are inserted as they are and never merged.
 
 Rules worth knowing:
-  * outcome: proxy wins, EXCEPT that a gateway no_result overrides a proxy ok.
-    The proxy delivered the result; only the gateway can see that the result
-    never reached the model (§9.5 "the gateway is the only source that can see
-    it"). A proxy failure (tool_error, timeout, ...) is kept, since it is the
-    reason the result never came back.
+  * outcome: the proxy's outcome always wins, including over a gateway
+    no_result. The gateway's timeout-based no_result is also produced when
+    the gateway loses its own echo work (queue full, Redis error, rollout
+    drain; tas-llm-router#284 review), so letting it override a proxy ok
+    would overwrite a correct outcome on every such loss. no_result still
+    lands on gateway-only rows. (Until tas-spark-jobs 0.5.0 a gateway
+    no_result overrode a proxy ok; rows merged before then keep it.)
+  * The gateway's additive no_result_basis ("sibling" | "timeout") is not
+    stored: there is no column, and from_json ignores fields the schema does
+    not name.
   * Ambiguity guard: a group with more than one distinct proxy event, or more
     than one distinct gateway event, is NOT merged. Some clients reuse
     tool_call ids (local models emit "call_0" every turn), and merging those
@@ -239,12 +244,8 @@ def merge_statements(staging_table: str) -> list:
                       AND bool_or(observed_by IN ('gateway', 'both')) THEN 'both'
                  WHEN bool_or(observed_by IN ('proxy', 'both')) THEN 'proxy'
                  ELSE 'gateway' END AS observed_by,
-            CASE WHEN bool_or(s.outcome = 'no_result')
-                      AND coalesce((array_agg(s.outcome ORDER BY src_rank, occurred_at, event_id)
-                                    FILTER (WHERE s.outcome <> 'no_result'))[1], 'ok') = 'ok'
-                 THEN 'no_result'
-                 ELSE (array_agg(s.outcome ORDER BY src_rank, occurred_at, event_id)
-                       FILTER (WHERE s.outcome <> 'no_result'))[1] END AS outcome
+            -- Proxy first, always: a gateway no_result never overrides it.
+            (array_agg(s.outcome ORDER BY src_rank, occurred_at, event_id))[1] AS outcome
         FROM tc_sightings s
         JOIN tc_groups g USING (tenant_id, tool_call_id)
         GROUP BY s.tenant_id, s.tool_call_id

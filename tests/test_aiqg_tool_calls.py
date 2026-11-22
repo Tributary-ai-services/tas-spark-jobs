@@ -190,6 +190,16 @@ def test_parse_time_falls_back_to_ce_time_then_kafka(spark):
     assert b['occurred_at'].isoformat().startswith('2026-11-21T12:00:00')
 
 
+def test_parse_accepts_no_result_basis_without_storing_it(spark):
+    out = _parse(spark, [_event(id='g1', data={'observed_by': 'gateway', 'outcome': 'no_result',
+                                               'no_result_basis': 'timeout'}),
+                         _event(id='g2', data={'observed_by': 'gateway', 'outcome': 'no_result',
+                                               'no_result_basis': 'sibling'})])
+    assert sorted(r['event_id'] for r in out) == ['g1', 'g2']
+    assert {r['outcome'] for r in out} == {'no_result'}
+    assert 'no_result_basis' not in out[0]
+
+
 def test_parse_gateway_event_without_server_or_findings(spark):
     r = _parse(spark, [_event(data={'observed_by': 'gateway', 'server_id': None, 'findings': None,
                                     'duration_ms': None, 'round_trip_ms': 3400})])[0]
@@ -328,14 +338,27 @@ def test_redelivery_is_idempotent(db):
     assert strip(again[0]) == strip(first[0])
 
 
-def test_gateway_no_result_overrides_proxy_ok_only(db):
+def test_proxy_outcome_wins_over_gateway_no_result(db):
+    """A gateway no_result can be the gateway losing its own echo work, so a
+    proxy outcome always wins; no_result lands only on gateway-only rows."""
     conn, t = db
     _batch(conn, [_proxy(t), _gateway(t, outcome='no_result')])
-    assert _rows(conn, t)[0]['outcome'] == 'no_result'
-    # and survives a re-delivered proxy 'ok'
+    rows = _rows(conn, t)
+    assert len(rows) == 1 and rows[0]['outcome'] == 'ok' and rows[0]['observed_by'] == 'both'
+    # either arrival order, across batches, and under re-delivery
+    _batch(conn, [_gateway(t, outcome='no_result')])
     _batch(conn, [_proxy(t)])
     rows = _rows(conn, t)
-    assert len(rows) == 1 and rows[0]['outcome'] == 'no_result'
+    assert len(rows) == 1 and rows[0]['outcome'] == 'ok' and rows[0]['observed_by'] == 'both'
+
+    _batch(conn, [_gateway(t, event_id='g3', tool_call_id='call_3', outcome='no_result')])
+    _batch(conn, [_proxy(t, event_id='p3', tool_call_id='call_3')])
+    r3 = [r for r in _rows(conn, t) if r['tool_call_id'] == 'call_3']
+    assert len(r3) == 1 and r3[0]['outcome'] == 'ok' and r3[0]['observed_by'] == 'both'
+
+    _batch(conn, [_gateway(t, event_id='g4', tool_call_id='call_4', outcome='no_result')])
+    r4 = [r for r in _rows(conn, t) if r['tool_call_id'] == 'call_4']
+    assert len(r4) == 1 and r4[0]['outcome'] == 'no_result' and r4[0]['observed_by'] == 'gateway'
 
     _batch(conn, [_proxy(t, event_id='p2', tool_call_id='call_2', outcome='tool_error'),
                   _gateway(t, event_id='g2', tool_call_id='call_2', outcome='no_result')])
